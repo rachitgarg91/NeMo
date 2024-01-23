@@ -147,13 +147,14 @@ class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
         # in case this arg is not provided, use the dummy default config.
         if model_parallel_config is None:
             model_parallel_config = ModelParallelConfig()
-
+        
         self.linear_in = ColumnParallelLinear(
             in_features,
             dim,
             config=model_parallel_config,
             bias=False,
-            gather_output=True,
+            #gather_output=True,
+            gather_output=False,
             init_method=self._get_init_fn(column_init_method),
         )
         if gather_output:
