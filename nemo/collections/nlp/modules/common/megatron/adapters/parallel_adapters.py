@@ -19,7 +19,7 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Optional
-
+import thunder
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -48,6 +48,8 @@ except (ImportError, ModuleNotFoundError):
 try:
     from megatron.core import ModelParallelConfig
     from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
+    from megatron.core.transformer.custom_layers.transformer_engine import TEColumnParallelLinear, TERowParallelLinear
+    from megatron.core import parallel_state
     from megatron.core.tensor_parallel.mappings import (
         gather_from_sequence_parallel_region,
         scatter_to_sequence_parallel_region,
@@ -129,6 +131,14 @@ class MLPInfusedAdapterConfig(InfusedAdapterConfig):
     _target_: str = "{0}.{1}".format(MLPInfusedAdapter.__module__, MLPInfusedAdapter.__name__)
 
 
+class ThunderDropout(torch.nn.Module):
+    def __init__(self, prob):
+        super(ThunderDropout, self).__init__()
+        self.dropout = torch.nn.Dropout(prob)
+
+    def forward(self, inp):
+        return self.dropout(inp)
+
 class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
     def __init__(
         self,
@@ -158,18 +168,36 @@ class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
         self.activation = activation_registry[activation]()
         self.norm_position = norm_position
         self.dim = dim
+        self.in_features = in_features
+        self.out_features  = out_features
         self.alpha = alpha if alpha is not None else self.dim
         self.input_is_parallel = input_is_parallel
+        self.gather_output = gather_output
         self.dropout_position = dropout_position
 
         # megatron_gpt_peft_models will provide this arg, but deprecated ones do not.
         # in case this arg is not provided, use the dummy default config.
         if model_parallel_config is None:
             model_parallel_config = ModelParallelConfig()
+        self.tp_rank = parallel_state.get_tensor_model_parallel_rank() 
         self._sequence_parallel = model_parallel_config.sequence_parallel
+        self.tensor_model_parallel_size = model_parallel_config.tensor_model_parallel_size
         model_parallel_config.sequence_parallel = False  # SP is irrelevant for the lora linear layer
+        model_parallel_config.disable_parameter_transpose_cache = True
+
 
         if input_is_parallel:
+            #self.linear_in = TERowParallelLinear(
+            #    in_features,
+            #    dim,
+            #    config=model_parallel_config,
+            #    input_is_parallel=True,
+            #    skip_bias_add=True,
+            #    bias=False,
+            #    init_method=self._get_init_fn(column_init_method),
+            #    is_expert = False,
+            #)
+
             self.linear_in = RowParallelLinear(
                 in_features,
                 dim,
@@ -179,36 +207,67 @@ class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
                 bias=False,
                 init_method=self._get_init_fn(column_init_method),
             )
-        else:
-            self.linear_in = ColumnParallelLinear(
-                in_features,
-                dim,
-                config=model_parallel_config,
-                bias=False,
-                gather_output=True,
-                init_method=self._get_init_fn(column_init_method),
-            )
+        else: 
+            #self.linear_in = ColumnParallelLinear(
+            #    in_features,
+            #    dim,
+            #    config=model_parallel_config,
+            #    bias=False,
+            #    gather_output=True,
+            #    init_method=self._get_init_fn(column_init_method),
+            #)
+            self.linear_in = nn.Linear(in_features, dim, bias=False)
         if gather_output:
-            self.linear_out = RowParallelLinear(
-                dim,
-                out_features,
-                config=model_parallel_config,
-                bias=False,
-                init_method=self._get_init_fn(row_init_method),
-                input_is_parallel=False,
-                skip_bias_add=True,
-            )
+            #self.linear_out = TERowParallelLinear(
+            #        dim,
+            #        out_features,
+            #        config=model_parallel_config,
+            #        init_method=self._get_init_fn(row_init_method),
+            #        input_is_parallel=False,
+            #        skip_bias_add=True,
+            #        is_expert=False,
+            #)
+            #self.linear_out = RowParallelLinear(
+            #    dim,
+            #    out_features,
+            #    config=model_parallel_config,
+            #    bias=False,
+            #    init_method=self._get_init_fn(row_init_method),
+            #    input_is_parallel=False,
+            #    skip_bias_add=True,
+            #)
+            # this is slower (?)
+            
+             self.linear_out = nn.Linear(dim, out_features, bias=False)
         else:
             # (@adithyare) we use this option to mirror the behavior a column parallel layer with two low-rank column parallel layers
-            # if the original column parallel layer uses gather_output=False, then we will use the self.liner_out layer defined below.
-            self.linear_out = ColumnParallelLinear(
-                dim,
-                out_features,
-                config=model_parallel_config,
-                bias=False,
-                gather_output=True if input_is_parallel else False,
-                init_method=self._get_init_fn(row_init_method),
-            )
+            # if the original column parallel layer uses gather_output=False, then we will use the self.linear_out layer defined below.
+            
+            #self.linear_out = nn.Linear(dim, out_features, bias=False)
+            
+
+            if 1: #input_is_parallel:
+                self.linear_out = ColumnParallelLinear(
+                    dim,
+                    out_features,
+                    config=model_parallel_config,
+                    bias=False,
+                    gather_output=True if input_is_parallel else False,
+                    skip_bias_add=True,
+                    init_method=self._get_init_fn(row_init_method),
+                    is_expert=False
+                )
+            #else:
+            #    self.linear_out = TEColumnParallelLinear(
+            #        dim,
+            #        out_features,
+            #        config=model_parallel_config,
+            #        bias=False,
+            #        gather_output=False,
+            #        skip_bias_add=True,
+            #        init_method=self._get_init_fn(row_init_method),
+            #        is_expert=False,
+            #    )
 
         if self.norm_position in ["pre", "post"]:
             ln_features = in_features if self.norm_position == "pre" else out_features
@@ -222,7 +281,8 @@ class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
             self.layer_norm = None
 
         if dropout > 0.0:
-            self.dropout = nn.Dropout(dropout)
+            self.dropout = thunder.jit(ThunderDropout(dropout))
+            #self.dropout = nn.Dropout(dropout)
         else:
             self.dropout = None
 
@@ -280,9 +340,22 @@ class ParallelLinearAdapter(nn.Module, AdapterModuleUtil):
             # this function also handles the backward pass correctly
             x = gather_from_sequence_parallel_region(x)
 
-        x, _ = self.linear_in(x)  # (@adithyare) ColumnLinear returns output and bias, we are ignoring the bias term.
+        if self.input_is_parallel:
+            x, _ = self.linear_in(x)  # (@adithyare) ColumnLinear returns output and bias, we are ignoring the bias term.
+        else:
+            x = self.linear_in(x)
         x = self.activation(x)
-        x, _ = self.linear_out(x)
+        if self.gather_output:
+            x = self.linear_out(x)
+        else:
+            x , _ = self.linear_out(x)
+
+        #chunk the output to make sure output 
+        #if self.input_is_parallel:
+        #lower_dim_size = x.shape[-1]
+        #if not self.gather_output:
+        #    x  = x[..., (lower_dim_size // self.tensor_model_parallel_size) * self.tp_rank  \
+        #        : (lower_dim_size // self.tensor_model_parallel_size) * (self.tp_rank + 1)]
 
         if self._sequence_parallel and self.input_is_parallel:
             # for attention_dense and linear_fc2
