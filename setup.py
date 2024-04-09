@@ -31,7 +31,7 @@ spec = importlib.util.spec_from_file_location('package_info', 'nemo/package_info
 package_info = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package_info)
 
-
+print("test")
 __contact_emails__ = package_info.__contact_emails__
 __contact_names__ = package_info.__contact_names__
 __description__ = package_info.__description__
