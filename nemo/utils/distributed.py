@@ -55,6 +55,8 @@ def initialize_distributed(args, backend='nccl'):
     master_port = os.getenv('MASTER_PORT', '6000')
     init_method += master_ip + ':' + master_port
     torch.distributed.init_process_group(backend=backend, world_size=world_size, rank=rank, init_method=init_method)
+    torch.distributed.ProcessGroupNCCL.Options(is_high_priority_stream=True)
+
     return local_rank, rank, world_size
 
 
