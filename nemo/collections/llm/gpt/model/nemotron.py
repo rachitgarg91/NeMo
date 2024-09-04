@@ -1,19 +1,34 @@
+# Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Callable, Optional
 
 import torch
 from torch import nn
-from transformers import NemotronConfig as HFNemotronConfig
-from transformers import NemotronForCausalLM
 
-from nemo.collections.common.tokenizers.huggingface.auto_tokenizer import AutoTokenizer
 from nemo.collections.llm.fn.activation import squared_relu
 from nemo.collections.llm.gpt.model.base import GPTConfig, GPTModel
 from nemo.collections.llm.utils import Config
 from nemo.lightning import OptimizerModule, io, teardown
 
 if TYPE_CHECKING:
+    from transformers import NemotronConfig as HFNemotronConfig
+    from transformers import NemotronForCausalLM
+
+    from nemo.collections.common.tokenizers.huggingface.auto_tokenizer import AutoTokenizer
     from nemo.collections.common.tokenizers.tokenizer_spec import TokenizerSpec
 
 
@@ -123,6 +138,8 @@ class HFNemotronImporter(io.ModelConnector["NemotronForCausalLM", NemotronModel]
         return NemotronModel(self.config, tokenizer=self.tokenizer)
 
     def apply(self, output_path: Path) -> Path:
+        from transformers import NemotronForCausalLM
+
         source = NemotronForCausalLM.from_pretrained(str(self))
         target = self.init()
         trainer = self.nemo_setup(target)
@@ -155,10 +172,14 @@ class HFNemotronImporter(io.ModelConnector["NemotronForCausalLM", NemotronModel]
 
     @property
     def tokenizer(self) -> "AutoTokenizer":
+        from nemo.collections.common.tokenizers.huggingface.auto_tokenizer import AutoTokenizer
+
         return AutoTokenizer(str(self))
 
     @property
     def config(self) -> NemotronConfig:
+        from transformers import NemotronConfig as HFNemotronConfig
+
         source = HFNemotronConfig.from_pretrained(str(self))
 
         def make_vocab_size_divisible_by(vocab_size):
@@ -224,6 +245,8 @@ class HFNemotronExporter(io.ModelConnector[NemotronModel, "NemotronForCausalLM"]
 
     @property
     def config(self) -> "HFNemotronConfig":
+        from transformers import NemotronConfig as HFNemotronConfig
+
         source: NemotronConfig = io.load_context(str(self)).model.config
 
         return HFNemotronConfig(
