@@ -331,7 +331,8 @@ class GPTConfig(TransformerConfig, io.IOMixin):
             if te_version() >= (2, 0):
                 # In TE 2.0, the default recipe is MXFP8BlockScaling, need to change it to DelayedScaling
                 te_recipe, _ = safe_import("transformer_engine.common.recipe")
-                recipe = te_recipe.DelayedScaling()
+                #recipe = te_recipe.DelayedScaling()
+                recipe = te_recipe.Float8CurrentScaling()
                 build_model_context = partial(fp8_model_init, recipe=recipe)
             else:
                 build_model_context = fp8_model_init
